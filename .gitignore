@@ -1,0 +1,18 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Logs & debug files
+*.log
+scripts/uco_captcha_debug.png
+
+# IDE
+.vscode/
+.idea/
