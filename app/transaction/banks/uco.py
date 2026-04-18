@@ -34,9 +34,7 @@ class UCOTransactionManager(TransactionManager):
         8. JS-click Submit (input#VALIDATE_STU_CREDENTIALS)
 
       Post-login
-        9.  Verify success (a#toggle-left appears)
-        10. Open menu → Dashboard
-        11. Scrape account number
+        9.  Scrape account number (visible directly on post-login page)
 
     Operations supported:
     - login_check  : login + scrape account number → report back
@@ -59,6 +57,7 @@ class UCOTransactionManager(TransactionManager):
         self.institution_name: str = "UCO"
         self.balance: float = 0.0
         self.account_no = self.login_details.get("account_number", "")
+        self.clear_cache: bool = False  # navigating directly to login URL — no cache clearing needed
 
     # HELPERS
     
@@ -72,7 +71,7 @@ class UCOTransactionManager(TransactionManager):
         server returns the actual image (not a redirect/error).
         Returns base64-encoded PNG string ready for self.solve().
         """
-        img = self.find_by_css('img#IMAGECAPTCHA')
+        img = self.find_by_css('img#IMAGECAPTCHA', timeout=10)
         if not img:
             raise Exception("Captcha image not found (img#IMAGECAPTCHA)")
 
@@ -110,7 +109,7 @@ class UCOTransactionManager(TransactionManager):
             # ── Step 2: Enter User ID ─────────────────────────────────────────
             self.debug("Entering User ID")
             self.send_keys(
-                self.find_by_css('input[name="AuthenticationFG.USER_PRINCIPAL"]'),
+                self.find_by_css('input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=10),
                 self.username
             )
             self.random_sleep(1, 2)
@@ -125,14 +124,14 @@ class UCOTransactionManager(TransactionManager):
 
             # ── Step 4: Enter captcha text ────────────────────────────────────
             self.send_keys(
-                self.find_by_css('input[name="AuthenticationFG.VERIFICATION_CODE"]'),
+                self.find_by_css('input[name="AuthenticationFG.VERIFICATION_CODE"]', timeout=10),
                 captcha_text
             )
             self.random_sleep(1, 2)
 
             # ── Step 5: Submit stage 1 ────────────────────────────────────────
             self.debug("Submitting stage 1 (User ID + Captcha)")
-            self._js_click(self.find_by_css('input#STU_VALIDATE_CREDENTIALS'))
+            self._js_click(self.find_by_css('input#STU_VALIDATE_CREDENTIALS', timeout=10))
             self.random_sleep(3, 5)
 
             # ── Step 6: Wait for password field ───────────────────────────────
@@ -142,7 +141,7 @@ class UCOTransactionManager(TransactionManager):
 
             # ── Step 7: Enter password character by character ─────────────────
             self.debug("Entering password")
-            pw_field = self.find_by_css('input[name="AuthenticationFG.ACCESS_CODE"]')
+            pw_field = self.find_by_css('input[name="AuthenticationFG.ACCESS_CODE"]', timeout=10)
             self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pw_field)
             self.random_sleep(0.5, 1)
             self._js_click(pw_field)
@@ -154,25 +153,14 @@ class UCOTransactionManager(TransactionManager):
 
             # ── Step 8: Submit stage 2 ────────────────────────────────────────
             self.debug("Submitting stage 2 (Password)")
-            self._js_click(self.find_by_css('input#VALIDATE_STU_CREDENTIALS'))
+            self._js_click(self.find_by_css('input#VALIDATE_STU_CREDENTIALS_UX', timeout=10))
             self.random_sleep(3, 5)
 
-            # ── Step 9: Verify login success ──────────────────────────────────
-            if not self.wait_for_element_by_css('a#toggle-left', timeout=30):
-                raise Exception("Login failed — menu toggle not found after submit")
-            self.update()
-
-            # ── Step 10: Open menu → Dashboard ───────────────────────────────
-            self.debug("Opening menu")
-            self._js_click(self.find_by_css('a#toggle-left'))
-            self.random_sleep(1, 2)
-            self.debug("Clicking Dashboard")
-            self._js_click(self.find_by_css('a#Dashboard'))
-            self.random_sleep(2, 3)
-
-            # ── Step 11: Scrape account number ────────────────────────────────
+            # ── Step 9: Scrape account number (visible on post-login page) ───────
+            self.debug("Waiting for account number")
             acct_el = self.find_by_css(
-                'a[name="HREF_OperativeAccountsWidgetFG.OPR_ACCOUNT_NUMBER_ARRAY[0]"]'
+                'a[name="HREF_OperativeAccountsWidgetFG.OPR_ACCOUNT_NUMBER_ARRAY[0]"]',
+                timeout=15,
             )
             if acct_el:
                 self.account_no = acct_el.text.strip()
@@ -191,7 +179,9 @@ class UCOTransactionManager(TransactionManager):
         try:
             self.debug("Starting UCO logout")
             self.update()
-            self._js_click(self.find_by_css('a#HREF_Logout'))
+            self._js_click(self.find_by_css('a#HREF_Logout', timeout=10))
+            self.random_sleep(2, 3)
+            self._js_click(self.find_by_css('a#LOG_OUT', timeout=10))
             self.random_sleep(2, 3)
             self.debug("UCO logout success")
             return True

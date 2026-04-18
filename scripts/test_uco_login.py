@@ -30,13 +30,13 @@ import base64
 import tempfile
 import time
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 from app.core.settings import Settings
+from app.core.adspower import AdsPowerAPI
+from app.core.browser import Browser
 from app.core.proxy import ProxyManager
 from app.core.twocaptcha import TwoCaptchaClient
 
@@ -71,56 +71,32 @@ def fail(msg): print(f"  {RED}✗{RESET}  {msg}"); sys.exit(1)
 def info(msg): print(f"  {CYAN}·{RESET}  {msg}")
 def step(n, msg): print(f"\n{BOLD}{CYAN}[{n}]{RESET} {BOLD}{msg}{RESET}")
 
-# AdsPower helpers
-
-def _ap_get(path, params=None):
-    headers = {"Authorization": f"Bearer {_settings.ADSPOWER_API_KEY}"}
-    r = requests.get(
-        f"http://local.adspower.net:{_settings.ADSPOWER_PORT}{path}",
-        headers=headers, params=params or {}, timeout=30
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-def _ap_post(path, payload):
-    headers = {"Authorization": f"Bearer {_settings.ADSPOWER_API_KEY}"}
-    r = requests.post(
-        f"http://local.adspower.net:{_settings.ADSPOWER_PORT}{path}",
-        headers=headers, json=payload, timeout=30
-    )
-    r.raise_for_status()
-    return r.json()
-
-
 def get_first_profile_id():
-    profiles = _ap_get("/api/v1/user/list").get("data", {}).get("list", [])
+    api = AdsPowerAPI()
+    profiles = api._get("/api/v1/user/list").get("list", [])
     if not profiles:
         fail("No AdsPower profiles found — create one first")
+        sys.exit(1)
     return profiles[0]["user_id"]
 
 
 def push_proxy(profile_id, proxy):
     """Strip internal ProxyManager fields and push proxy to AdsPower profile."""
-    clean = {k: v for k, v in proxy.items() if not k.startswith("_")}
-    _ap_post("/api/v1/user/update", {"user_id": profile_id, "user_proxy_config": clean})
+    api = AdsPowerAPI()
+    api.update_proxy(profile_id, proxy)
 
 
 def start_browser(profile_id):
-    data = _ap_get("/api/v1/browser/start", {"user_id": profile_id, "open_tabs": 1}).get("data", {})
-    driver_url   = data.get("ws", {}).get("selenium")
-    chrome_driver = data.get("webdriver")
-    if not driver_url or not chrome_driver:
-        fail(f"Browser start failed: {data}")
-    options = Options()
-    options.add_experimental_option("debuggerAddress", driver_url.replace("ws://", ""))
-    service = webdriver.ChromeService(executable_path=chrome_driver)
-    return webdriver.Chrome(service=service, options=options)
+    """Open browser using the same Browser.open() as the project."""
+    api = AdsPowerAPI()
+    b = Browser(api)
+    b.open(profile_id)
+    return b
 
 
-def stop_browser(profile_id):
+def stop_browser(browser_obj):
     try:
-        _ap_get("/api/v1/browser/stop", {"user_id": profile_id})
+        browser_obj.close()
     except Exception:
         pass
 
@@ -226,9 +202,9 @@ def run(profile_id, username, password):
     ok("Proxy updated on profile")
 
     # ── Step 3: Start browser ─────────────────────────────────────────────────
-    step(3, "Start AdsPower browser")
-    driver = start_browser(profile_id)
-    driver.maximize_window()
+    step(3, "Start AdsPower browser (via Browser.open)")
+    browser_obj = start_browser(profile_id)
+    driver = browser_obj.driver
     ok("Browser started (maximized)")
 
     try:
@@ -302,50 +278,38 @@ def run(profile_id, username, password):
 
         # ── Step 11: Submit stage 2 ───────────────────────────────────────────
         step(11, "Submit stage 2 — click Login button")
-        submit2 = find(driver, 'input#VALIDATE_STU_CREDENTIALS')
+        submit2 = find(driver, 'input#VALIDATE_STU_CREDENTIALS_UX')
         if not submit2:
-            fail("Stage 2 submit not found (input#VALIDATE_STU_CREDENTIALS)")
+            fail("Stage 2 submit not found (input#VALIDATE_STU_CREDENTIALS_UX)")
         js_click(driver, submit2)
         ok("Login button clicked")
         time.sleep(10)
 
-        # ── Step 12: Open menu ────────────────────────────────────────────────
-        step(12, "Open menu (toggle-left)")
-        menu_toggle = wait_for(driver, 'a#toggle-left', timeout=15)
-        if not menu_toggle:
-            fail("Menu toggle not found (a#toggle-left)")
-        js_click(driver, menu_toggle)
-        ok("Menu opened")
-        time.sleep(1.5)
-
-        # ── Step 13: Click Dashboard ──────────────────────────────────────────
-        step(13, "Click Dashboard")
-        dashboard = wait_for(driver, 'a#Dashboard', timeout=15)
-        if not dashboard:
-            fail("Dashboard link not found (a#Dashboard)")
-        js_click(driver, dashboard)
-        ok("Dashboard clicked")
-        time.sleep(3)
-        info(f"Page title : {driver.title}")
-        info(f"Current URL: {driver.current_url}")
-
-        # ── Step 14: Scrape account number ────────────────────────────────────
-        step(14, "Scrape account number")
+        # ── Step 12: Scrape account number ────────────────────────────────────
+        step(12, "Scrape account number")
         acct_el = wait_for(driver, 'a[name="HREF_OperativeAccountsWidgetFG.OPR_ACCOUNT_NUMBER_ARRAY[0]"]', timeout=15)
         if not acct_el:
             fail("Account number element not found")
         account_number = acct_el.text.strip()
         ok(f"Account number: {account_number}")
-        # ── Step 15: Logout ───────────────────────────────────────────────────
-        step(15, "Waiting 20s then logging out")
         time.sleep(20)
+
+        # ── Step 13: Logout ───────────────────────────────────────────────────
+        step(13, "Logging out")
         logout_btn = wait_for(driver, 'a#HREF_Logout', timeout=10)
         if not logout_btn:
             fail("Logout button not found (a#HREF_Logout)")
         js_click(driver, logout_btn)
-        ok("Logout clicked")
+        ok("First logout clicked")
+        time.sleep(2)
+
+        # ── Step 14: Confirm logout ───────────────────────────────────────────
+        confirm_btn = wait_for(driver, 'a#LOG_OUT', timeout=10)
+        if not confirm_btn:
+            fail("Confirm logout button not found (a#LOG_OUT)")
+        js_click(driver, confirm_btn)
+        ok("Confirm logout clicked")
         time.sleep(3)
-        info(f"Page after logout: {driver.title} — {driver.current_url}")
         ok("Flow complete")
 
     except SystemExit:
@@ -356,7 +320,7 @@ def run(profile_id, username, password):
         traceback.print_exc()
     finally:
         step("–", "Stopping browser")
-        stop_browser(profile_id)
+        stop_browser(browser_obj)
         ok("Browser stopped")
 
     print(f"\n{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}")
