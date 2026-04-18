@@ -604,12 +604,22 @@ class TransactionManager(Browser):
         Endpoint: _settings.PARENT_REPORT_URL
         (differs between payout and standard operations — see settings.py)
 
+        When LOCAL_TEST=True in .env, the POST is skipped and the result is
+        printed to the console only — nothing is sent to the command server.
+
         V1 location: TransactionManager.report_status()
         """
         try:
             self.debug("Reporting command status")
             self.data["success"] = int(success)
             self.debug("Report data: " + str(self.data))
+
+            if _settings.LOCAL_TEST:
+                status_str = "SUCCESS" if success else "FAILED"
+                self.info(f"[LOCAL_TEST] report_status suppressed — result: {status_str}")
+                self.info(f"[LOCAL_TEST] data: {self.data}")
+                return True
+
             resp = requests.post(
                 url=_settings.PARENT_REPORT_URL,
                 json=self.data,

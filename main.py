@@ -8,6 +8,7 @@ import time
 import re
 
 from app.core.adspower import AdsPowerAPI
+from app.core.settings import Settings
 from app.services.logger import Logger, init_logger, init_logger_worker, debug, info, warn, error
 from app.orchestration.parent import (
     get_parent_instructions,
@@ -17,6 +18,31 @@ from app.orchestration.parent import (
     is_update_time,
 )
 from app.transaction.banks.factory import get_transaction_manager
+
+_settings = Settings()
+
+# ── LOCAL TEST COMMAND ────────────────────────────────────────────────────────
+# Used only when LOCAL_TEST=true in .env.
+# Edit these values to match the account you want to test locally.
+# The project runs this command directly instead of fetching from the server,
+# and report_status() prints the result locally without POSTing to the server.
+LOCAL_TEST_COMMAND = {
+    "operation": "login_check",
+    "device_id": "123123123123",
+    "trader_id": "1",
+    "bot_id": "k1bi26dl",
+    "institution_name": "UCO",
+    "login_details": {
+        "username": "227678906",
+        "password": "Tinza@009988t",
+        "mobile_number": "7665067785",
+        "account_number": "21700110023785",
+        "qna": {},
+        "corp_id": "default",
+    },
+    "instruction_id": "2",
+}
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def run_transaction_manager(command: dict, child_logger: Logger, child_status: Queue, update_flag: Value) -> None:
@@ -107,6 +133,20 @@ def check_and_cleanup(bot_data: dict) -> bool:
 
 if __name__ == '__main__':  # REMEMBER TO ENABLE/DISABLE DEBUG APP
     logger = init_logger()
+
+    # ── LOCAL TEST MODE ───────────────────────────────────────────────────────
+    # Runs directly in the main process (no subprocess) so the Selenium/AdsPower
+    # connection stays stable on Windows.
+    if _settings.LOCAL_TEST:
+        info("LOCAL_TEST=true — running hardcoded command, no server communication")
+        info("Command: " + str(LOCAL_TEST_COMMAND))
+        status_queue = Queue()
+        update_flag = Value('i', 0)
+        run_transaction_manager(LOCAL_TEST_COMMAND, logger, status_queue, update_flag)
+        info("LOCAL_TEST run complete")
+        exit(0)
+    # ─────────────────────────────────────────────────────────────────────────
+
     bots = []
     bot_status_elapsed_minutes = 15
     debug("Starting BP2PB")

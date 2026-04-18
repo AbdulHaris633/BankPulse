@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     TEST_SERVER: bool = False
     VERBOSE: bool = True
     REMOTE_LOGGING: bool = True
+    # LOCAL_TEST — when True, main.py uses a hardcoded command instead of
+    # fetching from the server, skips confirm_instruction(), and report_status()
+    # prints locally instead of POSTing to the command server.
+    # Set to true in .env during local development; never commit with true.
+    LOCAL_TEST: bool = False
 
     # REQUEST TIMEOUT
     # Applied to every outbound HTTP request made by the bot (proxy fetch,
