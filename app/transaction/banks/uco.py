@@ -57,7 +57,7 @@ class UCOTransactionManager(TransactionManager):
         self.institution_name: str = "UCO"
         self.balance: float = 0.0
         self.account_no = self.login_details.get("account_number", "")
-        self.clear_cache: bool = False  # navigating directly to login URL — no cache clearing needed
+        self.clear_cache: bool = True
 
     # HELPERS
     
@@ -82,7 +82,17 @@ class UCOTransactionManager(TransactionManager):
             "Referer": self.driver.current_url,
             "User-Agent": self.driver.execute_script("return navigator.userAgent;"),
         }
-        resp = requests.get(captcha_url, cookies=session_cookies, headers=headers, timeout=15)
+        # Route through the same SOCKS5 proxy the browser uses so the UCO
+        # server sees the same IP and the connection isn't geo-blocked
+        proxies = None
+        if self.proxy:
+            proxy_url = (
+                f"{self.proxy['proxy_type']}://"
+                f"{self.proxy['proxy_user']}:{self.proxy['proxy_password']}@"
+                f"{self.proxy['proxy_host']}:{self.proxy['proxy_port']}"
+            )
+            proxies = {"http": proxy_url, "https": proxy_url}
+        resp = requests.get(captcha_url, cookies=session_cookies, headers=headers, proxies=proxies, timeout=15)
         if not resp.ok:
             raise Exception(f"Failed to download captcha image: HTTP {resp.status_code}")
 
