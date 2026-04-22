@@ -38,6 +38,7 @@ def get_transaction_manager(command: dict, child_status: Queue = None, update_fl
     from app.transaction.banks.rbl_sp import RBLSPTransactionManager
     from app.transaction.banks.rbl_corporate import RBLCorporateTransactionManager
     from app.transaction.banks.uco import UCOTransactionManager
+    from app.transaction.banks.equitas import EquitasTransactionManager
 
     institution = command.get('institution_name', '').upper()
 
@@ -54,6 +55,7 @@ def get_transaction_manager(command: dict, child_status: Queue = None, update_fl
         'RBL_SP':           RBLSPTransactionManager,
         'RBL_CORPORATE':    RBLCorporateTransactionManager,
         'UCO':              UCOTransactionManager,
+        'EQUITAS':          EquitasTransactionManager,
     }
 
     cls = managers.get(institution)
