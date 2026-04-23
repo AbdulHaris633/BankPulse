@@ -199,6 +199,31 @@ class UCOTransactionManager(TransactionManager):
             self.error(e)
             return False
 
+    # ADD BENEFICIARY
+
+    def add_beneficiary(self) -> bool:
+        """
+        Add a beneficiary in UCO Bank internet banking.
+
+        Data available:
+            self.command['beneficiary_details']:
+                name            — beneficiary full name
+                account_number  — beneficiary account number
+                ifsc_code       — IFSC code
+                other_bank      — True if other bank, False if UCO
+            self.login_details["qna"]["account_pin"] — transaction password (if needed)
+            get_otp(self.command)                     — fetch OTP from server
+
+        TODO: implement step by step.
+        Returns True on success, False on failure.
+        """
+        try:
+            self.info("Starting UCO add_beneficiary")
+            raise NotImplementedError("UCO add_beneficiary not yet implemented")
+        except Exception as e:
+            self.error(e)
+            return False
+
     # SYNC
 
     def sync_transactions(self) -> bool:
