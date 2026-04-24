@@ -1,21 +1,19 @@
 """
-UCO Bank Login — Single Automated Flow
-=======================================
-1.  Fetch proxy from Proxy302 via ProxyManager
-2.  Push proxy onto AdsPower profile
-3.  Start browser
-4.  Verify outbound IP
-5.  Navigate directly to UCO Retail login page
-6.  Enter User ID
-7.  Solve captcha via 2Captcha
-8.  Submit stage 1
-9.  Wait for password field
-10. Type password on virtual keyboard (keyset-aware, Shift-aware)
-11. Submit stage 2
-12. Inspect post-login page
+UCO Bank Login — Automated Flow
+=================================
+1.  Fetch proxy + push to AdsPower profile
+2.  Start browser (maximized)
+3.  Navigate to UCO retail login page
+4.  Enter User ID char by char + random mouse moves
+5.  Solve captcha via 2Captcha, enter char by char
+6.  Submit stage 1
+7.  Enter password char by char
+8.  Submit stage 2
+9.  Scrape account number
+10. Logout
 
 Run:
-    python scripts/test_uco_login.py --username <id> --password <pw>
+    python scripts/test_uco_login.py
 
 Optional:
     --profile <id>   AdsPower profile ID (default: first available)
@@ -26,11 +24,14 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
-import base64
+import random
 import tempfile
 import time
 import requests
+from urllib.parse import urljoin
+
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -41,6 +42,9 @@ from app.core.proxy import ProxyManager
 from app.core.twocaptcha import TwoCaptchaClient
 
 _settings = Settings()
+
+USERNAME = "227678906"
+PASSWORD = "Tinza@009988t"
 
 RETAIL_LOGIN_URL = (
     "https://ebanking.uco.bank.in/corp/AuthenticationController"
@@ -54,120 +58,114 @@ RETAIL_LOGIN_URL = (
     "&UserType=R"
 )
 
-# Virtual keyboard keyset maps (kept for reference — not used in current flow)
-# KB_NORMAL_CHARS = set('abcdefghijklmnopqrstuvwxyz@._-')
-# KB_META1_CHARS  = set('0123456789~`/!$=}\'\\^?#+%*{|&')
-
 GREEN  = "\033[92m"
 RED    = "\033[91m"
-YELLOW = "\033[93m"
 CYAN   = "\033[96m"
 BOLD   = "\033[1m"
 RESET  = "\033[0m"
 
-
-def ok(msg):   print(f"  {GREEN}✓{RESET}  {msg}")
-def fail(msg): print(f"  {RED}✗{RESET}  {msg}"); sys.exit(1)
-def info(msg): print(f"  {CYAN}·{RESET}  {msg}")
+def ok(msg):      print(f"  {GREEN}✓{RESET}  {msg}")
+def fail(msg):    print(f"  {RED}✗{RESET}  {msg}"); sys.exit(1)
+def info(msg):    print(f"  {CYAN}·{RESET}  {msg}")
 def step(n, msg): print(f"\n{BOLD}{CYAN}[{n}]{RESET} {BOLD}{msg}{RESET}")
+
 
 def get_first_profile_id():
     api = AdsPowerAPI()
     profiles = api._get("/api/v1/user/list").get("list", [])
     if not profiles:
-        fail("No AdsPower profiles found — create one first")
-        sys.exit(1)
+        fail("No AdsPower profiles found")
     return profiles[0]["user_id"]
 
 
-def push_proxy(profile_id, proxy):
-    """Strip internal ProxyManager fields and push proxy to AdsPower profile."""
-    api = AdsPowerAPI()
-    api.update_proxy(profile_id, proxy)
-
-
-def start_browser(profile_id):
-    """Open browser using the same Browser.open() as the project."""
-    api = AdsPowerAPI()
-    b = Browser(api)
-    b.open(profile_id)
-    return b
-
-
-def stop_browser(browser_obj):
-    try:
-        browser_obj.close()
-    except Exception:
-        pass
-
-# Selenium helpers
-
-def wait_for(driver, css, timeout=20):
+def wait_for_css(driver, selector, timeout=30, clickable=False):
+    condition = EC.element_to_be_clickable if clickable else EC.presence_of_element_located
     try:
         return WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, css))
+            condition((By.CSS_SELECTOR, selector))
         )
     except Exception:
         return None
 
 
-def find(driver, css):
-    els = driver.find_elements(By.CSS_SELECTOR, css)
-    return els[0] if els else None
+def random_mouse_move(driver, moves=4):
+    """Dispatch random mousemove events across the visible viewport."""
+    try:
+        width  = driver.execute_script("return window.innerWidth")
+        height = driver.execute_script("return window.innerHeight")
+        for _ in range(moves):
+            x = random.randint(80, max(81, width - 80))
+            y = random.randint(80, max(81, height - 80))
+            driver.execute_script(
+                "document.dispatchEvent(new MouseEvent('mousemove',"
+                "{bubbles:true,clientX:arguments[0],clientY:arguments[1]}))",
+                x, y
+            )
+            time.sleep(random.uniform(0.08, 0.25))
+    except Exception:
+        pass
 
-# Captcha solver
 
-def js_click(driver, el):
-    """Click via JavaScript — bypasses any overlay element intercepting the click."""
+def human_click(driver, el):
+    """Scroll into view, move mouse over element, then JS-click (reliable on form inputs)."""
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+    time.sleep(random.uniform(0.1, 0.2))
+    try:
+        ActionChains(driver)\
+            .move_to_element_with_offset(el, random.randint(-4, 4), random.randint(-2, 2))\
+            .pause(random.uniform(0.1, 0.3))\
+            .perform()
+    except Exception:
+        pass
+    time.sleep(random.uniform(0.1, 0.2))
     driver.execute_script("arguments[0].click();", el)
 
 
-def solve_captcha(driver):
-    img = find(driver, 'img#IMAGECAPTCHA')
+def human_type(field, text):
+    """Type text character by character with random human-like delays."""
+    for char in text:
+        field.send_keys(char)
+        time.sleep(random.uniform(0.15, 0.4))
+
+
+def solve_captcha(driver, proxy=None):
+    """Download captcha via browser session, solve via 2Captcha, return text."""
+    img = driver.find_elements(By.CSS_SELECTOR, 'img#IMAGECAPTCHA')
     if not img:
         fail("Captcha image not found (img#IMAGECAPTCHA)")
-
-    # Get the image src (relative URL) and build the full URL
-    src = img.get_attribute("src")
-    info(f"Captcha img src: {src}")
-
-    # Build absolute URL from the current page origin
-    from urllib.parse import urljoin
-    current_url = driver.current_url
-    captcha_url = urljoin(current_url, src)
-    info(f"Captcha full URL: {captcha_url}")
-
-    # Fetch the image using the browser's cookies so the session is authenticated
+    src = img[0].get_attribute("src")
+    captcha_url = urljoin(driver.current_url, src)
     session_cookies = {c["name"]: c["value"] for c in driver.get_cookies()}
     headers = {
-        "Referer": current_url,
+        "Referer": driver.current_url,
         "User-Agent": driver.execute_script("return navigator.userAgent;"),
     }
-    resp = requests.get(captcha_url, cookies=session_cookies, headers=headers, timeout=15)
+    proxies = None
+    if proxy:
+        proxy_url = (
+            f"{proxy['proxy_type']}://"
+            f"{proxy['proxy_user']}:{proxy['proxy_password']}@"
+            f"{proxy['proxy_host']}:{proxy['proxy_port']}"
+        )
+        proxies = {"http": proxy_url, "https": proxy_url}
+    resp = requests.get(captcha_url, cookies=session_cookies, headers=headers, proxies=proxies, timeout=15)
     if not resp.ok:
-        fail(f"Failed to download captcha image: HTTP {resp.status_code}")
-    captcha_bytes = resp.content
-    info(f"Captcha image downloaded: {len(captcha_bytes)} bytes, content-type: {resp.headers.get('content-type')}")
+        fail(f"Failed to download captcha: HTTP {resp.status_code}")
 
-    # Save to a fixed path so you can inspect the exact image sent to 2Captcha
-    captcha_save_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "uco_captcha_debug.png"
-    )
-    with open(captcha_save_path, "wb") as f:
-        f.write(captcha_bytes)
-    info(f"Captcha image saved for inspection → open: {captcha_save_path}")
+    # Save for inspection
+    debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uco_captcha_debug.png")
+    with open(debug_path, "wb") as f:
+        f.write(resp.content)
+    info(f"Captcha saved → {debug_path}")
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    tmp.write(captcha_bytes)
-    tmp.close()
-
     try:
+        tmp.write(resp.content)
+        tmp.flush()
+        tmp.close()
         client = TwoCaptchaClient(api_key=_settings.TWOCAPTCHA_API_KEY)
         result = client.solve_image(tmp.name, case_sensitive=True)
-        print(f"\n  {CYAN}2Captcha raw response:{RESET}")
-        print(f"    {result}")
         text = result.get("solution", {}).get("text", "").strip()
-        info(f"Extracted captcha text: {repr(text)}")
         if not text:
             fail("2Captcha returned empty solution")
         return text
@@ -178,149 +176,145 @@ def solve_captcha(driver):
             pass
 
 
-# Main flow
+def run(profile_id):
+    username = USERNAME
+    password = PASSWORD
 
-def run(profile_id, username, password):
     print(f"\n{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}")
     print(f"{BOLD}{CYAN}  UCO Bank — Automated Login Test{RESET}")
     print(f"{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}")
     print(f"  Profile  : {profile_id}")
     print(f"  Username : {username}")
-    print(f"  Password : {'*' * len(password)}")
     print(f"{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}\n")
 
-    # ── Step 1: Fetch proxy from Proxy302 ─────────────────────────────────────
+    # ── Step 1: Proxy ─────────────────────────────────────────────────────────
     step(1, "Fetch proxy from Proxy302")
     proxy = ProxyManager().get_proxy()
     if not proxy:
-        fail("ProxyManager returned no proxy — check .env credentials and Proxy302 balance")
-    ok(f"Got proxy: {proxy['proxy_type']}://{proxy['proxy_host']}:{proxy['proxy_port']}")
+        fail("ProxyManager returned no proxy")
+    AdsPowerAPI().update_proxy(profile_id, proxy)
+    ok(f"Proxy: {proxy['proxy_type']}://{proxy['proxy_host']}:{proxy['proxy_port']}")
 
-    # ── Step 2: Push proxy to AdsPower profile ────────────────────────────────
-    step(2, "Push proxy onto AdsPower profile")
-    push_proxy(profile_id, proxy)
-    ok("Proxy updated on profile")
-
-    # ── Step 3: Start browser ─────────────────────────────────────────────────
-    step(3, "Start AdsPower browser (via Browser.open)")
-    browser_obj = start_browser(profile_id)
+    # ── Step 2: Browser ───────────────────────────────────────────────────────
+    step(2, "Start AdsPower browser")
+    browser_obj = Browser(AdsPowerAPI())
+    browser_obj.open(profile_id)
     driver = browser_obj.driver
-    ok("Browser started (maximized)")
+    time.sleep(2)
+    driver.maximize_window()
+    ok("Browser started")
 
     try:
-        # ── Step 4: Verify outbound IP ────────────────────────────────────────
-        step(4, "Verify outbound IP through proxy")
-        driver.get("https://api.ipify.org?format=json")
-        time.sleep(2)
-        body = driver.find_element(By.TAG_NAME, "body").text
-        ok(f"Outbound IP: {body}")
 
-        # ── Step 5: Navigate to UCO Retail login ──────────────────────────────
-        step(5, "Navigate to UCO Retail login page")
+        # ── Step 3: Navigate to UCO login page ────────────────────────────────
+        step(3, "Navigate to UCO retail login page")
         driver.get(RETAIL_LOGIN_URL)
-        if not wait_for(driver, 'input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=30):
-            fail("Login page did not load — USER_PRINCIPAL input not found")
-        ok(f"Login page loaded — {driver.current_url}")
+        if not wait_for_css(driver, 'input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=30):
+            fail("Login page did not load")
+        random_mouse_move(driver, 3)
+        ok(f"Login page loaded")
 
-        # ── Step 6: Enter User ID ─────────────────────────────────────────────
-        step(6, "Enter User ID")
-        user_field = find(driver, 'input[name="AuthenticationFG.USER_PRINCIPAL"]')
-        user_field.send_keys(username)
+        # ── Step 4: Enter User ID ─────────────────────────────────────────────
+        step(4, "Enter User ID")
+        user_field = wait_for_css(driver, 'input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=10, clickable=True)
+        if not user_field:
+            fail("User ID field not found")
+        random_mouse_move(driver, 2)
+        human_click(driver, user_field)
+        time.sleep(random.uniform(0.3, 0.7))
+        human_type(user_field, username)
         time.sleep(1)
         ok(f"User ID entered: {username}")
 
-        # ── Step 7: Solve captcha via 2Captcha ────────────────────────────────
-        step(7, "Solve captcha via 2Captcha")
-        info("Sending captcha image to 2Captcha...")
-        captcha_text = solve_captcha(driver)
+        # ── Step 5: Solve captcha ─────────────────────────────────────────────
+        step(5, "Solve captcha via 2Captcha")
+        random_mouse_move(driver, 2)
+        info("Sending captcha to 2Captcha...")
+        captcha_text = solve_captcha(driver, proxy)
         ok(f"Captcha solved: {captcha_text}")
 
-        captcha_input = find(driver, 'input[name="AuthenticationFG.VERIFICATION_CODE"]')
-        if not captcha_input:
-            fail("Captcha input not found (AuthenticationFG.VERIFICATION_CODE)")
-        captcha_input.clear()
-        captcha_input.send_keys(captcha_text)
+        cap_field = wait_for_css(driver, 'input[name="AuthenticationFG.VERIFICATION_CODE"]', timeout=10, clickable=True)
+        if not cap_field:
+            fail("Captcha input field not found")
+        random_mouse_move(driver, 2)
+        human_click(driver, cap_field)
+        time.sleep(random.uniform(0.3, 0.6))
+        human_type(cap_field, captcha_text)
+        time.sleep(1)
         ok("Captcha text entered")
-        time.sleep(0.5)
 
-        # ── Step 8: Submit stage 1 ────────────────────────────────────────────
-        step(8, "Submit stage 1 (User ID + Captcha)")
-        submit1 = find(driver, 'input#STU_VALIDATE_CREDENTIALS')
+        # ── Step 6: Submit stage 1 ────────────────────────────────────────────
+        step(6, "Submit stage 1 (User ID + Captcha)")
+        random_mouse_move(driver, 3)
+        submit1 = wait_for_css(driver, 'input#STU_VALIDATE_CREDENTIALS', timeout=10)
         if not submit1:
-            fail("Login button not found (input#STU_VALIDATE_CREDENTIALS)")
-        js_click(driver, submit1)
-        ok("Stage 1 submitted")
+            fail("Stage 1 submit button not found")
+        human_click(driver, submit1)
         time.sleep(4)
-        info(f"URL after stage 1: {driver.current_url}")
+        ok("Stage 1 submitted")
 
-        # ── Step 9: Wait for password field ───────────────────────────────────
-        step(9, "Wait for password field (stage 2)")
-        pw_field = wait_for(driver, 'input[name="AuthenticationFG.ACCESS_CODE"]', timeout=25)
+        # ── Step 7: Wait for and enter password ───────────────────────────────
+        step(7, "Enter password")
+        pw_field = wait_for_css(driver, 'input[name="AuthenticationFG.ACCESS_CODE"]', timeout=25, clickable=True)
         if not pw_field:
-            fail(
-                "Password field did not appear — stage 1 likely rejected\n"
-                f"  Page title: {driver.title}\n"
-                f"  URL: {driver.current_url}"
-            )
-        ok("Password field appeared")
-
-        # ── Step 10: Enter password one character at a time ──────────────────
-        step(10, "Enter password character by character")
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pw_field)
-        time.sleep(0.5)
-        js_click(driver, pw_field)
+            fail("Password field did not appear — stage 1 may have failed (wrong captcha/User ID)")
+        random_mouse_move(driver, 2)
+        human_click(driver, pw_field)
+        time.sleep(random.uniform(0.5, 1))
+        human_type(pw_field, password)
         time.sleep(1)
-        for char in password:
-            pw_field.send_keys(char)
-            time.sleep(0.15)
-        ok(f"Password entered character by character ({len(password)} chars)")
-        time.sleep(1)
+        ok(f"Password entered ({len(password)} chars)")
 
-        # ── Step 11: Submit stage 2 ───────────────────────────────────────────
-        step(11, "Submit stage 2 — click Login button")
-        submit2 = find(driver, 'input#VALIDATE_STU_CREDENTIALS_UX')
+        # ── Step 8: Submit stage 2 ────────────────────────────────────────────
+        step(8, "Submit stage 2 (Password)")
+        random_mouse_move(driver, 3)
+        submit2 = wait_for_css(driver, 'input#VALIDATE_STU_CREDENTIALS_UX', timeout=10)
         if not submit2:
-            fail("Stage 2 submit not found (input#VALIDATE_STU_CREDENTIALS_UX)")
-        js_click(driver, submit2)
-        ok("Login button clicked")
+            fail("Stage 2 submit button not found")
+        human_click(driver, submit2)
         time.sleep(10)
+        ok("Stage 2 submitted")
 
-        # ── Step 12: Scrape account number ────────────────────────────────────
-        step(12, "Scrape account number")
-        acct_el = wait_for(driver, 'a[name="HREF_OperativeAccountsWidgetFG.OPR_ACCOUNT_NUMBER_ARRAY[0]"]', timeout=15)
+        # ── Step 9: Scrape account number ─────────────────────────────────────
+        step(9, "Scrape account number")
+        acct_el = wait_for_css(
+            driver,
+            'a[name="HREF_OperativeAccountsWidgetFG.OPR_ACCOUNT_NUMBER_ARRAY[0]"]',
+            timeout=15
+        )
         if not acct_el:
-            fail("Account number element not found")
+            fail("Account number element not found — login may have failed")
         account_number = acct_el.text.strip()
         ok(f"Account number: {account_number}")
-        time.sleep(20)
-
-        # ── Step 13: Logout ───────────────────────────────────────────────────
-        step(13, "Logging out")
-        logout_btn = wait_for(driver, 'a#HREF_Logout', timeout=10)
-        if not logout_btn:
-            fail("Logout button not found (a#HREF_Logout)")
-        js_click(driver, logout_btn)
-        ok("First logout clicked")
-        time.sleep(2)
-
-        # ── Step 14: Confirm logout ───────────────────────────────────────────
-        confirm_btn = wait_for(driver, 'a#LOG_OUT', timeout=10)
-        if not confirm_btn:
-            fail("Confirm logout button not found (a#LOG_OUT)")
-        js_click(driver, confirm_btn)
-        ok("Confirm logout clicked")
         time.sleep(3)
-        ok("Flow complete")
+
+        # ── Step 10: Logout ───────────────────────────────────────────────────
+        step(10, "Logout")
+        random_mouse_move(driver, 2)
+        logout_btn = wait_for_css(driver, 'a#HREF_Logout', timeout=10)
+        if not logout_btn:
+            fail("Logout button not found")
+        human_click(driver, logout_btn)
+        time.sleep(2)
+        confirm_btn = wait_for_css(driver, 'a#LOG_OUT', timeout=10)
+        if not confirm_btn:
+            fail("Confirm logout button not found")
+        human_click(driver, confirm_btn)
+        time.sleep(3)
+        ok("Logged out")
 
     except SystemExit:
         raise
     except Exception as e:
         import traceback
-        print(f"\n  {RED}ERROR{RESET}  Unhandled exception: {e}")
+        print(f"\n  {RED}ERROR{RESET}  {e}")
         traceback.print_exc()
     finally:
         step("–", "Stopping browser")
-        stop_browser(browser_obj)
+        try:
+            browser_obj.close()
+        except Exception:
+            pass
         ok("Browser stopped")
 
     print(f"\n{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}")
@@ -334,4 +328,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     profile = args.profile or get_first_profile_id()
-    run(profile_id=profile, username="227678906", password="Tinza@009988t")
+    run(profile_id=profile)

@@ -3,12 +3,10 @@ Equitas Bank — Login Page Inspector
 =====================================
 1.  Fetch proxy + push to AdsPower profile
 2.  Start browser (maximized)
-3.  Check outbound IP and geolocation
-4.  Navigate to Equitas internet banking page (via driver.get)
-5.  Find and click Login button (click-through, not direct URL)
-6.  Switch to the new tab that opens
-7.  Print browser console errors
-8.  Wait 2 minutes so you can press F12 and inspect
+3.  Navigate directly to Equitas login portal
+4.  Enter username, password, solve captcha  (char by char + mouse moves)
+5.  Click Accounts button, then Login button (natural mouse movement)
+6.  Wait 2 minutes so you can press F12 and inspect
 
 Run:
     python scripts/test_equitas_inspect.py
@@ -22,15 +20,25 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
+import base64
+import tempfile
 import time
+import random
+
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 from app.core.adspower import AdsPowerAPI
 from app.core.browser import Browser
 from app.core.proxy import ProxyManager
+from app.core.settings import Settings
+from app.core.twocaptcha import TwoCaptchaClient
 
-HOME_URL     = "https://equitas.bank.in/personal-banking/ways-to-bank/internet-banking/"
+LOGIN_URL    = "https://ib.equip.equitasbank.com/login"
+USERNAME     = "7891242"
+PASSWORD     = "Raam@2025"
 INSPECT_WAIT = 120
 
 GREEN = "\033[92m"
@@ -54,86 +62,105 @@ def get_first_profile_id():
 
 
 def safe_get(driver, url, timeout=15):
-    """Navigate using driver.get() with a short page load timeout.
-    Catches timeout and connection errors — browser keeps loading on its own."""
+    """Navigate with a short page load timeout — browser keeps loading on its own."""
     driver.set_page_load_timeout(timeout)
     try:
         driver.get(url)
     except Exception:
-        pass  # catches TimeoutException, ERR_SOCKS_CONNECTION_FAILED, etc.
+        pass
     finally:
         driver.set_page_load_timeout(30)
 
 
-def js_click(driver, el):
+def wait_for_css(driver, selector, timeout=30, clickable=False):
+    condition = EC.element_to_be_clickable if clickable else EC.presence_of_element_located
+    try:
+        return WebDriverWait(driver, timeout).until(
+            condition((By.CSS_SELECTOR, selector))
+        )
+    except Exception:
+        return None
+
+
+def wait_for_xpath(driver, xpath, timeout=30, clickable=False):
+    condition = EC.element_to_be_clickable if clickable else EC.presence_of_element_located
+    try:
+        return WebDriverWait(driver, timeout).until(
+            condition((By.XPATH, xpath))
+        )
+    except Exception:
+        return None
+
+
+def random_mouse_move(driver, moves=4):
+    """Dispatch random mousemove events across the visible viewport."""
+    try:
+        width  = driver.execute_script("return window.innerWidth")
+        height = driver.execute_script("return window.innerHeight")
+        for _ in range(moves):
+            x = random.randint(80, max(81, width - 80))
+            y = random.randint(80, max(81, height - 80))
+            driver.execute_script(
+                "document.dispatchEvent(new MouseEvent('mousemove',"
+                "{bubbles:true,clientX:arguments[0],clientY:arguments[1]}))",
+                x, y
+            )
+            time.sleep(random.uniform(0.08, 0.25))
+    except Exception:
+        pass
+
+
+def human_click(driver, el):
+    """Scroll into view, move mouse over element, then JS-click (reliable on MUI)."""
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+    time.sleep(random.uniform(0.1, 0.2))
+    try:
+        x_offset = random.randint(-4, 4)
+        y_offset = random.randint(-2, 2)
+        ActionChains(driver)\
+            .move_to_element_with_offset(el, x_offset, y_offset)\
+            .pause(random.uniform(0.1, 0.3))\
+            .perform()
+    except Exception:
+        pass
+    time.sleep(random.uniform(0.1, 0.2))
     driver.execute_script("arguments[0].click();", el)
 
 
-def find_login_button(driver):
-    # Strategy 1: exact confirmed img filename inside button
-    for img in driver.find_elements(By.CSS_SELECTOR, 'img[src*="Polygon_5_86ad9c2638"]'):
-        try:
-            btn = driver.execute_script("return arguments[0].closest('button');", img)
-            if btn:
-                info("Found Login button via Polygon_5_86ad9c2638 image")
-                return btn
-        except Exception:
-            pass
-
-    # Strategy 2: any Polygon_5 image inside a button (filename variant)
-    for img in driver.find_elements(By.CSS_SELECTOR, 'img[src*="Polygon_5"]'):
-        try:
-            btn = driver.execute_script("return arguments[0].closest('button');", img)
-            if btn:
-                info("Found Login button via Polygon_5 image")
-                return btn
-        except Exception:
-            pass
-
-    # Strategy 3: Equitas 2.0 direct login link
-    for a in driver.find_elements(By.CSS_SELECTOR, 'a[href*="ib.equip.equitasbank.com/login"]'):
-        info("Found Equitas 2.0 login link")
-        return a
-
-    # Strategy 4: button containing <p>Login</p>
-    for btn in driver.find_elements(By.XPATH, '//button[.//p[text()="Login"]]'):
-        try:
-            if btn.is_displayed():
-                info("Found Login button via <p>Login</p> child")
-                return btn
-        except Exception:
-            pass
-
-    # Strategy 5: any visible button with text "Login"
-    for btn in driver.find_elements(By.XPATH, '//button[contains(., "Login")]'):
-        try:
-            if btn.is_displayed():
-                info(f"Found button by text: '{btn.text.strip()}'")
-                return btn
-        except Exception:
-            pass
-
-    return None
+def human_type(field, text):
+    """Type text character by character with random human-like delays."""
+    for char in text:
+        field.send_keys(char)
+        time.sleep(random.uniform(0.08, 0.18))
 
 
-def print_console_logs(driver):
+def solve_captcha_b64(b64_str, settings):
+    """Decode base64 captcha, save to temp file, solve via 2Captcha."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     try:
-        logs = driver.get_log('browser')
-        if logs:
-            info(f"Browser console logs ({len(logs)}):")
-            for log in logs:
-                print(f"    [{log.get('level','?')}] {log.get('message','')[:120]}")
-        else:
-            info("No browser console errors")
-    except Exception as e:
-        info(f"Could not read console logs: {e}")
+        tmp.write(base64.b64decode(b64_str))
+        tmp.flush()
+        tmp.close()
+        client = TwoCaptchaClient(settings.TWOCAPTCHA_API_KEY)
+        result = client.solve_image(tmp.name, case_sensitive=True)
+        return result["solution"]["text"].strip()
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
 
 def run(profile_id):
+    settings = Settings()
+    username = USERNAME
+    password = PASSWORD
+
     print(f"\n{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}")
     print(f"{BOLD}{CYAN}  Equitas Bank — Login Page Inspector{RESET}")
     print(f"{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}")
-    print(f"  Profile : {profile_id}")
+    print(f"  Profile  : {profile_id}")
+    print(f"  Username : {username}")
     print(f"{BOLD}{CYAN}══════════════════════════════════════════════════{RESET}\n")
 
     # ── Step 1: Proxy ─────────────────────────────────────────────────────────
@@ -154,62 +181,92 @@ def run(profile_id):
     ok("Browser started")
 
     try:
-        # ── Step 3: Navigate to main Equitas page ────────────────────────────
-        step(3, "Navigate to Equitas internet banking page")
-        safe_get(driver, HOME_URL)
-        time.sleep(15)  # let SPA fully settle
+
+        # ── Step 3: Navigate to login portal ──────────────────────────────────
+        step(3, "Navigate to Equitas login portal")
+        safe_get(driver, LOGIN_URL)
+        time.sleep(15)
+        random_mouse_move(driver, 3)
         try:
             info(f"URL: {driver.current_url}")
         except Exception:
             pass
-        ok("Main page loaded")
+        ok("Login portal loaded")
 
-        # ── Step 4: Find and click Login button ───────────────────────────────
-        step(4, "Find and click Login button")
-        login_btn = find_login_button(driver)
+        # ── Step 4: Enter username ─────────────────────────────────────────────
+        step(4, "Enter username")
+        user_field = wait_for_css(driver, '#login_userId_new', timeout=30)
+        if not user_field:
+            fail("User ID field not found — page may not have loaded")
+        random_mouse_move(driver, 2)
+        human_click(driver, user_field)
+        time.sleep(random.uniform(0.3, 0.7))
+        human_type(user_field, username)
+        time.sleep(1)
+        ok(f"Username entered: {username}")
+
+        # ── Step 5: Enter password ─────────────────────────────────────────────
+        step(5, "Enter password")
+        random_mouse_move(driver, 2)
+        pw_field = wait_for_css(driver, '#login_password', timeout=10)
+        if not pw_field:
+            fail("Password field not found")
+        human_click(driver, pw_field)
+        time.sleep(random.uniform(0.3, 0.7))
+        human_type(pw_field, password)
+        time.sleep(1)
+        ok("Password entered")
+
+        # ── Step 6: Extract and solve captcha ─────────────────────────────────
+        step(6, "Solve captcha")
+        captcha_img = wait_for_css(driver, 'img[src^="data:image/png;base64"]', timeout=15)
+        if not captcha_img:
+            fail("Captcha image not found")
+        src = captcha_img.get_attribute("src")
+        captcha_b64 = src.split(",", 1)[1] if "," in src else src
+        info("Captcha image extracted, sending to 2Captcha...")
+        captcha_text = solve_captcha_b64(captcha_b64, settings)
+        if not captcha_text:
+            fail("Captcha could not be solved")
+        ok(f"Captcha solved: {captcha_text}")
+
+        # ── Step 7: Enter captcha text ────────────────────────────────────────
+        step(7, "Enter captcha text")
+        random_mouse_move(driver, 2)
+        cap_field = wait_for_css(driver, '.captcha-page__text-field input', timeout=10)
+        if not cap_field:
+            cap_field = wait_for_css(driver, 'input[maxlength="5"]', timeout=5)
+        if not cap_field:
+            fail("Captcha input field not found")
+        human_click(driver, cap_field)
+        time.sleep(random.uniform(0.3, 0.6))
+        human_type(cap_field, captcha_text)
+        time.sleep(1)
+        ok("Captcha text entered")
+
+        # ── Step 8: Click Accounts button ─────────────────────────────────────
+        step(8, "Click Accounts button")
+        random_mouse_move(driver, 3)
+        accounts_btn = wait_for_xpath(driver, '//button[normalize-space(.)="Accounts"]', timeout=10, clickable=True)
+        if not accounts_btn:
+            fail("Accounts button not found")
+        human_click(driver, accounts_btn)
+        time.sleep(1)
+        ok("Accounts button clicked")
+
+        # ── Step 9: Click Login button ────────────────────────────────────────
+        step(9, "Click Login button")
+        random_mouse_move(driver, 2)
+        login_btn = wait_for_css(driver, 'button.login-page__login-button', timeout=10, clickable=True)
         if not login_btn:
-            all_buttons = driver.find_elements(By.CSS_SELECTOR, 'button')
-            info(f"Login button not found. Buttons on page ({len(all_buttons)}):")
-            for b in all_buttons:
-                try:
-                    info(f"  '{b.text.strip()[:60]}'")
-                except Exception:
-                    pass
-            fail("Login button not found — see list above")
-
-        original_handles = set(driver.window_handles)
-        js_click(driver, login_btn)
+            fail("Login button not found")
+        human_click(driver, login_btn)
+        time.sleep(2)
         ok("Login button clicked")
-        time.sleep(4)
 
-        # ── Step 6: Switch to new tab ─────────────────────────────────────────
-        step(5, "Switch to new tab")
-        new_handles = set(driver.window_handles) - original_handles
-        if new_handles:
-            driver.switch_to.window(new_handles.pop())
-            time.sleep(3)
-            try:
-                ok(f"New tab URL: {driver.current_url}")
-            except Exception:
-                ok("Switched to new tab")
-        else:
-            info("No new tab — navigation may have happened in-place")
-            try:
-                info(f"Current URL: {driver.current_url}")
-            except Exception:
-                pass
-
-        # ── Step 7: Console logs ──────────────────────────────────────────────
-        step(6, "Browser console errors")
-        print_console_logs(driver)
-
-        # ── Step 8: Wait for inspection ───────────────────────────────────────
-        step(7, f"Waiting {INSPECT_WAIT}s — press F12 in AdsPower to inspect")
-        info("Look for: User ID input, password input, button IDs/names")
-        for remaining in range(INSPECT_WAIT, 0, -10):
-            print(f"  {CYAN}·{RESET}  {remaining}s remaining...", flush=True)
-            time.sleep(10)
-        ok("Done")
+        # ── Step 10: Wait for inspection ──────────────────────────────────────
+        step(10, f"Waiting {INSPECT_WAIT}s — press F12 to inspect")
+        time.sleep(INSPECT_WAIT)
 
     except SystemExit:
         raise
