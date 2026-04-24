@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import requests
 from pyclick import HumanClicker
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.remote.webelement import WebElement
 
 from app.core.adspower import AdsPowerAPI
@@ -1137,6 +1138,26 @@ class TransactionManager(Browser):
         except Exception as e:
             self.warn(e)
             self.warn("Error during random mouse movements")
+
+    def human_click(self, el: WebElement) -> None:
+        """
+        Scroll element into view, move the mouse over it, then JS-click.
+        Mouse movement fires real browser events for anti-bot; JS-click is
+        reliable on MUI/React buttons that have ripple overlays.
+        """
+        self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        time.sleep(random.uniform(0.1, 0.2))
+        try:
+            x_off = random.randint(-4, 4)
+            y_off = random.randint(-2, 2)
+            ActionChains(self.driver)\
+                .move_to_element_with_offset(el, x_off, y_off)\
+                .pause(random.uniform(0.1, 0.3))\
+                .perform()
+        except Exception:
+            pass
+        time.sleep(random.uniform(0.1, 0.2))
+        self.driver.execute_script("arguments[0].click();", el)
 
     # ─── DOWNLOAD HELPER ─────────────────────────────────────────────────────
 
