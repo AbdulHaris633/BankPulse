@@ -1,7 +1,6 @@
 import base64
 import tempfile
 import os
-import time
 import requests
 from multiprocessing import Queue, Value
 from urllib.parse import urljoin
@@ -60,10 +59,6 @@ class UCOTransactionManager(TransactionManager):
         self.clear_cache: bool = True
 
     # HELPERS
-    
-    def _js_click(self, el) -> None:
-        """JS click — bypasses overlay elements that intercept normal clicks."""
-        self.driver.execute_script("arguments[0].click();", el)
 
     def _download_captcha_b64(self) -> str:
         """
@@ -115,33 +110,36 @@ class UCOTransactionManager(TransactionManager):
             if not self.wait_for_element_by_css('input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=30):
                 raise Exception("Login page did not load")
             self.random_sleep(2, 3)
+            self.random_movements()
 
-            # ── Step 2: Enter User ID ─────────────────────────────────────────
+            # ── Step 2: Enter User ID char by char ────────────────────────────
             self.debug("Entering User ID")
-            self.send_keys(
-                self.find_by_css('input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=10),
-                self.username
-            )
+            user_field = self.find_by_css('input[name="AuthenticationFG.USER_PRINCIPAL"]', timeout=10)
+            self.human_click(user_field)
+            self.random_sleep(0.3, 0.7)
+            self.human_type(self.username, user_field)
             self.random_sleep(1, 2)
 
             # ── Step 3: Solve captcha ─────────────────────────────────────────
             self.debug("Downloading and solving captcha")
+            self.random_movements()
             captcha_b64 = self._download_captcha_b64()
             captcha_text = self.solve(captcha_b64)
             if not captcha_text:
                 raise Exception("Could not solve captcha")
             self.debug(f"Captcha solved: {captcha_text}")
 
-            # ── Step 4: Enter captcha text ────────────────────────────────────
-            self.send_keys(
-                self.find_by_css('input[name="AuthenticationFG.VERIFICATION_CODE"]', timeout=10),
-                captcha_text
-            )
+            # ── Step 4: Enter captcha text char by char ───────────────────────
+            cap_field = self.find_by_css('input[name="AuthenticationFG.VERIFICATION_CODE"]', timeout=10)
+            self.human_click(cap_field)
+            self.random_sleep(0.3, 0.6)
+            self.human_type(captcha_text, cap_field)
             self.random_sleep(1, 2)
 
             # ── Step 5: Submit stage 1 ────────────────────────────────────────
             self.debug("Submitting stage 1 (User ID + Captcha)")
-            self._js_click(self.find_by_css('input#STU_VALIDATE_CREDENTIALS', timeout=10))
+            self.random_movements()
+            self.human_click(self.find_by_css('input#STU_VALIDATE_CREDENTIALS', timeout=10))
             self.random_sleep(3, 5)
 
             # ── Step 6: Wait for password field ───────────────────────────────
@@ -149,24 +147,22 @@ class UCOTransactionManager(TransactionManager):
             if not self.wait_for_element_by_css('input[name="AuthenticationFG.ACCESS_CODE"]', timeout=30):
                 raise Exception("Password field not found — stage 1 may have failed (wrong captcha/User ID)")
 
-            # ── Step 7: Enter password character by character ─────────────────
+            # ── Step 7: Enter password char by char ───────────────────────────
             self.debug("Entering password")
+            self.random_movements()
             pw_field = self.find_by_css('input[name="AuthenticationFG.ACCESS_CODE"]', timeout=10)
-            self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", pw_field)
+            self.human_click(pw_field)
             self.random_sleep(0.5, 1)
-            self._js_click(pw_field)
-            self.random_sleep(1, 1.5)
-            for char in self.password:
-                pw_field.send_keys(char)
-                time.sleep(0.15)
+            self.human_type(self.password, pw_field)
             self.random_sleep(0.5, 1)
 
             # ── Step 8: Submit stage 2 ────────────────────────────────────────
             self.debug("Submitting stage 2 (Password)")
-            self._js_click(self.find_by_css('input#VALIDATE_STU_CREDENTIALS_UX', timeout=10))
+            self.random_movements()
+            self.human_click(self.find_by_css('input#VALIDATE_STU_CREDENTIALS_UX', timeout=10))
             self.random_sleep(3, 5)
 
-            # ── Step 9: Scrape account number (visible on post-login page) ───────
+            # ── Step 9: Scrape account number (visible on post-login page) ────
             self.debug("Waiting for account number")
             acct_el = self.find_by_css(
                 'a[name="HREF_OperativeAccountsWidgetFG.OPR_ACCOUNT_NUMBER_ARRAY[0]"]',
@@ -189,9 +185,9 @@ class UCOTransactionManager(TransactionManager):
         try:
             self.debug("Starting UCO logout")
             self.update()
-            self._js_click(self.find_by_css('a#HREF_Logout', timeout=10))
+            self.human_click(self.find_by_css('a#HREF_Logout', timeout=10))
             self.random_sleep(2, 3)
-            self._js_click(self.find_by_css('a#LOG_OUT', timeout=10))
+            self.human_click(self.find_by_css('a#LOG_OUT', timeout=10))
             self.random_sleep(2, 3)
             self.debug("UCO logout success")
             return True
